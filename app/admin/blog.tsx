@@ -5,14 +5,8 @@ import { Plus, CreditCard as Edit, Trash2, Search, ArrowLeft, Eye, EyeOff } from
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { BlogPost } from '@/types/database';
-import { 
-  getLocalBlogPosts, 
-  addLocalBlogPost, 
-  updateLocalBlogPost, 
-  deleteLocalBlogPost,
-  LocalBlogPost,
-  refreshLocalData
-} from '@/lib/localData';
+import { getLocalBlogPosts, subscribeToDataChanges } from '@/lib/localData';
+import { blogPostsAPI } from '@/lib/api';
 
 export default function AdminBlogScreen() {
   const [posts, setPosts] = useState<BlogPost[]>([]);
@@ -32,28 +26,26 @@ export default function AdminBlogScreen() {
 
   useEffect(() => {
     fetchPosts();
+    
+    // Subscribe to data changes for real-time updates
+    const unsubscribe = subscribeToDataChanges(() => {
+      fetchPosts();
+    });
+    
+    return unsubscribe;
   }, []);
 
   const fetchPosts = async () => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const localPosts = getLocalBlogPosts();
-        setPosts(localPosts);
-        setLoading(false);
-        return;
+      const result = await blogPostsAPI.getAll();
+      if (result.success) {
+        setPosts(result.data);
       }
-
-      const { data, error } = await supabase
-        .from('blog_posts')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      setPosts(data || []);
     } catch (error) {
       console.error('Error fetching posts:', error);
-      Alert.alert('Error', 'Failed to fetch blog posts');
+      // Fallback to local data
+      const localPosts = getLocalBlogPosts();
+      setPosts(localPosts);
     } finally {
       setLoading(false);
     }
@@ -61,55 +53,21 @@ export default function AdminBlogScreen() {
 
   const handleSavePost = async () => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const postData = {
-          title: formData.title,
-          content: formData.content,
-          excerpt: formData.excerpt,
-          author: formData.author,
-          is_published: formData.is_published,
-          featured_image_url: formData.featured_image_url,
-          tags: formData.tags.split(',').map(tag => tag.trim()).filter(tag => tag),
-          published_at: formData.is_published ? new Date().toISOString() : undefined,
-        };
-
-        if (editingPost) {
-          updateLocalBlogPost(editingPost.id, postData);
-          Alert.alert('Success', 'Post updated successfully');
-        } else {
-          addLocalBlogPost(postData);
-          Alert.alert('Success', 'Post created successfully');
-        }
-        
-        setShowModal(false);
-        setEditingPost(null);
-        resetForm();
-        refreshLocalData(); // Notify other components to refresh
-        fetchPosts();
-        return;
-      }
-
       const postData = {
-        ...formData,
+        title: formData.title,
+        content: formData.content,
+        excerpt: formData.excerpt,
+        author: formData.author,
+        is_published: formData.is_published,
+        featured_image_url: formData.featured_image_url,
         tags: formData.tags.split(',').map(tag => tag.trim()).filter(tag => tag),
-        published_at: formData.is_published ? new Date().toISOString() : null,
       };
 
       if (editingPost) {
-        const { error } = await supabase
-          .from('blog_posts')
-          .update(postData)
-          .eq('id', editingPost.id);
-        
-        if (error) throw error;
+        await blogPostsAPI.update(editingPost.id, postData);
         Alert.alert('Success', 'Post updated successfully');
       } else {
-        const { error } = await supabase
-          .from('blog_posts')
-          .insert([postData]);
-        
-        if (error) throw error;
+        await blogPostsAPI.create(postData);
         Alert.alert('Success', 'Post created successfully');
       }
       
@@ -134,27 +92,13 @@ export default function AdminBlogScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              if (!supabase) {
-                // Use local data when Supabase is not configured
-                const success = deleteLocalBlogPost(postId);
-                if (success) {
-                  Alert.alert('Success', 'Post deleted successfully');
-                  refreshLocalData(); // Notify other components to refresh
-                  fetchPosts();
-                } else {
-                  Alert.alert('Error', 'Post not found');
-                }
-                return;
+              const result = await blogPostsAPI.delete(postId);
+              if (result.success) {
+                Alert.alert('Success', 'Post deleted successfully');
+                fetchPosts();
+              } else {
+                Alert.alert('Error', 'Failed to delete post');
               }
-
-              const { error } = await supabase
-                .from('blog_posts')
-                .delete()
-                .eq('id', postId);
-              
-              if (error) throw error;
-              Alert.alert('Success', 'Post deleted successfully');
-              fetchPosts();
             } catch (error) {
               console.error('Error deleting post:', error);
               Alert.alert('Error', 'Failed to delete post');
@@ -167,26 +111,9 @@ export default function AdminBlogScreen() {
 
   const togglePublishStatus = async (post: BlogPost) => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        updateLocalBlogPost(post.id, { 
-          is_published: !post.is_published,
-          published_at: !post.is_published ? new Date().toISOString() : undefined
-        });
-        refreshLocalData(); // Notify other components to refresh
-        fetchPosts();
-        return;
-      }
-
-      const { error } = await supabase
-        .from('blog_posts')
-        .update({ 
-          is_published: !post.is_published,
-          published_at: !post.is_published ? new Date().toISOString() : null
-        })
-        .eq('id', post.id);
-      
-      if (error) throw error;
+      await blogPostsAPI.update(post.id, { 
+        is_published: !post.is_published 
+      });
       fetchPosts();
     } catch (error) {
       console.error('Error updating post status:', error);

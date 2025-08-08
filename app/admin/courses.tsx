@@ -5,19 +5,8 @@ import { Plus, CreditCard as Edit, Trash2, Search, DollarSign, Users, ArrowLeft,
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { Course, CourseVideo } from '@/types/database';
-import { 
-  getLocalCourses, 
-  addLocalCourse, 
-  updateLocalCourse, 
-  deleteLocalCourse,
-  getLocalCourseVideos,
-  addLocalCourseVideo,
-  updateLocalCourseVideo,
-  deleteLocalCourseVideo,
-  LocalCourse,
-  LocalCourseVideo,
-  refreshLocalData
-} from '@/lib/localData';
+import { getLocalCourses, getLocalCourseVideos, subscribeToDataChanges } from '@/lib/localData';
+import { coursesAPI, courseVideosAPI } from '@/lib/api';
 
 export default function AdminCoursesScreen() {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -48,6 +37,19 @@ export default function AdminCoursesScreen() {
 
   useEffect(() => {
     fetchCourses();
+    
+    // Subscribe to data changes for real-time updates
+    const unsubscribe = subscribeToDataChanges(() => {
+      fetchCourses();
+      if (selectedCourse) {
+        fetchCourseVideos(selectedCourse.id);
+      }
+    });
+    
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     if (selectedCourse) {
       fetchCourseVideos(selectedCourse.id);
     }
@@ -55,24 +57,15 @@ export default function AdminCoursesScreen() {
 
   const fetchCourses = async () => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const localCourses = getLocalCourses();
-        setCourses(localCourses);
-        setLoading(false);
-        return;
+      const result = await coursesAPI.getAll();
+      if (result.success) {
+        setCourses(result.data);
       }
-
-      const { data, error } = await supabase
-        .from('courses')
-        .select('*')
-        .order('order_index');
-      
-      if (error) throw error;
-      setCourses(data || []);
     } catch (error) {
       console.error('Error fetching courses:', error);
-      Alert.alert('Error', 'Failed to fetch courses');
+      // Fallback to local data
+      const localCourses = getLocalCourses();
+      setCourses(localCourses);
     } finally {
       setLoading(false);
     }
@@ -80,38 +73,11 @@ export default function AdminCoursesScreen() {
 
   const handleSaveCourse = async () => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        if (editingCourse) {
-          updateLocalCourse(editingCourse.id, formData);
-          Alert.alert('Success', 'Course updated successfully');
-        } else {
-          addLocalCourse(formData);
-          Alert.alert('Success', 'Course created successfully');
-        }
-        
-        setShowModal(false);
-        setEditingCourse(null);
-        resetForm();
-        refreshLocalData(); // Notify other components to refresh
-        fetchCourses();
-        return;
-      }
-
       if (editingCourse) {
-        const { error } = await supabase
-          .from('courses')
-          .update(formData)
-          .eq('id', editingCourse.id);
-        
-        if (error) throw error;
+        await coursesAPI.update(editingCourse.id, formData);
         Alert.alert('Success', 'Course updated successfully');
       } else {
-        const { error } = await supabase
-          .from('courses')
-          .insert([formData]);
-        
-        if (error) throw error;
+        await coursesAPI.create(formData);
         Alert.alert('Success', 'Course created successfully');
       }
       
@@ -127,23 +93,15 @@ export default function AdminCoursesScreen() {
 
   const fetchCourseVideos = async (courseId: string) => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const localVideos = getLocalCourseVideos(courseId);
-        setCourseVideos(localVideos);
-        return;
+      const result = await courseVideosAPI.getByCourse(courseId);
+      if (result.success) {
+        setCourseVideos(result.data);
       }
-
-      const { data, error } = await supabase
-        .from('course_videos')
-        .select('*')
-        .eq('course_id', courseId)
-        .order('order_index');
-      
-      if (error) throw error;
-      setCourseVideos(data || []);
     } catch (error) {
       console.error('Error fetching course videos:', error);
+      // Fallback to local data
+      const localVideos = getLocalCourseVideos(courseId);
+      setCourseVideos(localVideos);
     }
   };
 
@@ -151,30 +109,6 @@ export default function AdminCoursesScreen() {
     if (!selectedCourse) return;
 
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const videoData = {
-          ...videoFormData,
-          course_id: selectedCourse.id,
-          order_index: courseVideos.length,
-        };
-
-        if (editingVideo) {
-          updateLocalCourseVideo(editingVideo.id, videoData);
-          Alert.alert('Success', 'Video updated successfully');
-        } else {
-          addLocalCourseVideo(videoData);
-          Alert.alert('Success', 'Video added successfully');
-        }
-        
-        setShowVideoModal(false);
-        setEditingVideo(null);
-        resetVideoForm();
-        refreshLocalData(); // Notify other components to refresh
-        fetchCourseVideos(selectedCourse.id);
-        return;
-      }
-
       const videoData = {
         ...videoFormData,
         course_id: selectedCourse.id,
@@ -182,19 +116,10 @@ export default function AdminCoursesScreen() {
       };
 
       if (editingVideo) {
-        const { error } = await supabase
-          .from('course_videos')
-          .update(videoData)
-          .eq('id', editingVideo.id);
-        
-        if (error) throw error;
+        await courseVideosAPI.update(editingVideo.id, videoData);
         Alert.alert('Success', 'Video updated successfully');
       } else {
-        const { error } = await supabase
-          .from('course_videos')
-          .insert([videoData]);
-        
-        if (error) throw error;
+        await courseVideosAPI.create(videoData);
         Alert.alert('Success', 'Video added successfully');
       }
       
@@ -219,28 +144,10 @@ export default function AdminCoursesScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              if (!supabase) {
-                // Use local data when Supabase is not configured
-                const success = deleteLocalCourseVideo(videoId);
-                if (success) {
-                  Alert.alert('Success', 'Video deleted successfully');
-                  refreshLocalData(); // Notify other components to refresh
-                  if (selectedCourse) {
-                    fetchCourseVideos(selectedCourse.id);
-                  }
-                } else {
-                  Alert.alert('Error', 'Video not found');
-                }
-                return;
+              const result = await courseVideosAPI.delete(videoId);
+              if (result.success) {
+                Alert.alert('Success', 'Video deleted successfully');
               }
-
-              const { error } = await supabase
-                .from('course_videos')
-                .delete()
-                .eq('id', videoId);
-              
-              if (error) throw error;
-              Alert.alert('Success', 'Video deleted successfully');
               if (selectedCourse) {
                 fetchCourseVideos(selectedCourse.id);
               }
@@ -265,26 +172,10 @@ export default function AdminCoursesScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              if (!supabase) {
-                // Use local data when Supabase is not configured
-                const success = deleteLocalCourse(courseId);
-                if (success) {
-                  Alert.alert('Success', 'Course deleted successfully');
-                  refreshLocalData(); // Notify other components to refresh
-                  fetchCourses();
-                } else {
-                  Alert.alert('Error', 'Course not found');
-                }
-                return;
+              const result = await coursesAPI.delete(courseId);
+              if (result.success) {
+                Alert.alert('Success', 'Course deleted successfully');
               }
-
-              const { error } = await supabase
-                .from('courses')
-                .delete()
-                .eq('id', courseId);
-              
-              if (error) throw error;
-              Alert.alert('Success', 'Course deleted successfully');
               fetchCourses();
             } catch (error) {
               console.error('Error deleting course:', error);

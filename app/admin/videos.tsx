@@ -5,14 +5,8 @@ import { Plus, CreditCard as Edit, Trash2, Search, Play, ArrowLeft } from 'lucid
 import { router } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { Video } from '@/types/database';
-import { 
-  getLocalVideos, 
-  addLocalVideo, 
-  updateLocalVideo, 
-  deleteLocalVideo,
-  LocalVideo,
-  refreshLocalData
-} from '@/lib/localData';
+import { getLocalVideos, subscribeToDataChanges } from '@/lib/localData';
+import { videosAPI } from '@/lib/api';
 
 const categories = ['courses', 'testimonials', 'inspiration'] as const;
 
@@ -34,28 +28,26 @@ export default function AdminVideosScreen() {
 
   useEffect(() => {
     fetchVideos();
+    
+    // Subscribe to data changes for real-time updates
+    const unsubscribe = subscribeToDataChanges(() => {
+      fetchVideos();
+    });
+    
+    return unsubscribe;
   }, []);
 
   const fetchVideos = async () => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const localVideos = getLocalVideos();
-        setVideos(localVideos);
-        setLoading(false);
-        return;
+      const result = await videosAPI.getAll();
+      if (result.success) {
+        setVideos(result.data);
       }
-
-      const { data, error } = await supabase
-        .from('videos')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      setVideos(data || []);
     } catch (error) {
       console.error('Error fetching videos:', error);
-      Alert.alert('Error', 'Failed to fetch videos');
+      // Fallback to local data
+      const localVideos = getLocalVideos();
+      setVideos(localVideos);
     } finally {
       setLoading(false);
     }
@@ -69,55 +61,21 @@ export default function AdminVideosScreen() {
 
   const handleSaveVideo = async () => {
     try {
-      if (!supabase) {
-        // Use local data when Supabase is not configured
-        const videoData = {
-          title: formData.title,
-          description: formData.description,
-          youtube_id: extractYouTubeId(formData.youtube_id),
-          category: formData.category,
-          duration: formData.duration,
-          views_count: 0,
-          rating: 0.0,
-          is_premium: formData.is_premium,
-          thumbnail_url: formData.thumbnail_url,
-        };
-
-        if (editingVideo) {
-          updateLocalVideo(editingVideo.id, videoData);
-          Alert.alert('Success', 'Video updated successfully');
-        } else {
-          addLocalVideo(videoData);
-          Alert.alert('Success', 'Video created successfully');
-        }
-        
-        setShowModal(false);
-        setEditingVideo(null);
-        resetForm();
-        refreshLocalData(); // Notify other components to refresh
-        fetchVideos();
-        return;
-      }
-
       const videoData = {
-        ...formData,
+        title: formData.title,
+        description: formData.description,
         youtube_id: extractYouTubeId(formData.youtube_id),
+        category: formData.category,
+        duration: formData.duration,
+        is_premium: formData.is_premium,
+        thumbnail_url: formData.thumbnail_url,
       };
 
       if (editingVideo) {
-        const { error } = await supabase
-          .from('videos')
-          .update(videoData)
-          .eq('id', editingVideo.id);
-        
-        if (error) throw error;
+        await videosAPI.update(editingVideo.id, videoData);
         Alert.alert('Success', 'Video updated successfully');
       } else {
-        const { error } = await supabase
-          .from('videos')
-          .insert([videoData]);
-        
-        if (error) throw error;
+        await videosAPI.create(videoData);
         Alert.alert('Success', 'Video created successfully');
       }
       
@@ -142,26 +100,10 @@ export default function AdminVideosScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              if (!supabase) {
-                // Use local data when Supabase is not configured
-                const success = deleteLocalVideo(videoId);
-                if (success) {
-                  Alert.alert('Success', 'Video deleted successfully');
-                  refreshLocalData(); // Notify other components to refresh
-                  fetchVideos();
-                } else {
-                  Alert.alert('Error', 'Video not found');
-                }
-                return;
+              const result = await videosAPI.delete(videoId);
+              if (result.success) {
+                Alert.alert('Success', 'Video deleted successfully');
               }
-
-              const { error } = await supabase
-                .from('videos')
-                .delete()
-                .eq('id', videoId);
-              
-              if (error) throw error;
-              Alert.alert('Success', 'Video deleted successfully');
               fetchVideos();
             } catch (error) {
               console.error('Error deleting video:', error);
